@@ -9,6 +9,8 @@
 #include <pthread.h>
 
 #define SERVER_PORT 8082
+#define BUFFER_SIZE 2048
+#define BACKLOG 3
 
 typedef struct
 {
@@ -66,22 +68,50 @@ void *send_thread(void *arg)
     return NULL;
 }
 
+static void die(const char *message)
+{
+    perror(message);
+    exit(EXIT_FAILURE);
+}
+
+static void run_chat(int file_descriptor, const int buffer_size)
+{
+    char recv_buffer[buffer_size];
+    char send_buffer[buffer_size];
+
+    Args recv_args = {.buffer = recv_buffer, .buffer_size = sizeof(recv_buffer) - 1, .file_descriptor = file_descriptor};
+    Args send_args = {.buffer = send_buffer, .buffer_size = sizeof(send_buffer) - 1, .file_descriptor = file_descriptor};
+
+    pthread_t recv_thread_id;
+    pthread_t send_thread_id;
+
+    if (pthread_create(&recv_thread_id, NULL, recv_thread, &recv_args) != 0)
+    {
+        fprintf(stderr, "pthread_create(recv_thread) failed\n");
+        return;
+    }
+
+    if (pthread_create(&send_thread_id, NULL, send_thread, &send_args) != 0)
+    {
+        fprintf(stderr, "pthread_create(send_thread) failed\n");
+        pthread_cancel(recv_thread_id);
+        pthread_join(recv_thread_id, NULL);
+        return;
+    }
+
+    pthread_join(recv_thread_id, NULL);
+    pthread_join(send_thread_id, NULL);
+}
+
 void start_server(int port)
 {
-    char recv_buffer[2048];
-    char send_buffer[2048];
-    size_t recv_buffer_size = sizeof(recv_buffer) - 1;
-    size_t send_buffer_size = sizeof(send_buffer) - 1;
-
-    int server_fd, client_fd;
-    int check_res;
-
-    server_fd = socket(AF_INET, SOCK_STREAM, 0);
+    int server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd < 0)
-    {
-        perror("\nCHAT HOST ERROR: socket() call failed\n");
-        exit(1);
-    }
+        die("socket");
+
+    int reuse = 1;
+    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0)
+        die("setsockopt");
 
     struct sockaddr_in client_address;
     struct sockaddr_in server_address;
@@ -90,43 +120,31 @@ void start_server(int port)
     server_address.sin_port = htons(port);
     server_address.sin_addr.s_addr = INADDR_ANY;
 
-    socklen_t server_address_len = sizeof(server_address);
-    check_res = bind(server_fd, (struct sockaddr *)&server_address, server_address_len);
-    if (check_res < 0)
+    if (bind(server_fd, (struct sockaddr *)&server_address, sizeof(server_address)) < 0)
     {
-        perror("\nCHAT HOST ERROR: bind() call failed\n");
-        exit(1);
+        close(server_fd);
+        die("bind");
     }
 
-    check_res = listen(server_fd, 5);
-    if (check_res < 0)
+    if (listen(server_fd, BACKLOG) < 0)
     {
-        perror("\nCHAT HOST ERROR: listen() call failed\n");
-        exit(1);
+        close(server_fd);
+        die("listen");
     }
+
+    printf("Waiting for client...\n");
 
     socklen_t client_address_len = sizeof(client_address);
-    client_fd = accept(server_fd, (struct sockaddr *)&client_address, &client_address_len);
+    int client_fd = accept(server_fd, (struct sockaddr *)&client_address, &client_address_len);
     if (client_fd < 0)
     {
-        perror("\nCHAT HOST ERROR: accept() call failed\n");
         close(server_fd);
-        exit(1);
+        die("accept");
     }
 
     printf("Client connected!\n\n");
 
-    Args recv_args = {.buffer = recv_buffer, .buffer_size = recv_buffer_size, .file_descriptor = client_fd};
-    Args send_args = {.buffer = send_buffer, .buffer_size = send_buffer_size, .file_descriptor = client_fd};
-
-    pthread_t recv_thread_id;
-    pthread_t send_thread_id;
-
-    pthread_create(&recv_thread_id, NULL, recv_thread, &recv_args);
-    pthread_create(&send_thread_id, NULL, send_thread, &send_args);
-
-    pthread_join(recv_thread_id, NULL);
-    pthread_join(send_thread_id, NULL);
+    run_chat(client_fd, BUFFER_SIZE);
 
     close(client_fd);
     close(server_fd);
@@ -134,52 +152,31 @@ void start_server(int port)
 
 void start_client(const char *ip_addr, int port)
 {
-    char recv_buffer[2048];
-    char send_buffer[2048];
-    size_t recv_buffer_size = sizeof(recv_buffer) - 1;
-    size_t send_buffer_size = sizeof(send_buffer) - 1;
-
-    int client_fd;
-
-    client_fd = socket(AF_INET, SOCK_STREAM, 0);
+    int client_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (client_fd < 0)
-    {
-        perror("\nCHAT CLIENT ERROR: socket() call failed\n");
-        exit(1);
-    }
+        die("socket");
 
     struct sockaddr_in server_address;
 
     server_address.sin_family = AF_INET;
     server_address.sin_port = htons(port);
 
-    if (inet_pton(AF_INET, ip_addr, &server_address.sin_addr) < 1)
+    if (inet_pton(AF_INET, ip_addr, &server_address.sin_addr) != 1)
     {
-        perror("\nInvalid IP address\n");
-        exit(1);
+        close(client_fd);
+        fprintf(stderr, "Invalid IP address: %s\n", ip_addr);
+        exit(EXIT_FAILURE);
     }
 
-    int connection = connect(client_fd, (struct sockaddr *)&server_address, sizeof(server_address));
-    if (connection < 0)
+    if (connect(client_fd, (struct sockaddr *)&server_address, sizeof(server_address)) < 0)
     {
-        perror("\nCHAT CLIENT ERROR: connect() call failed\n");
         close(client_fd);
-        exit(1);
+        die("connect");
     }
 
     printf("Successfully connected!\n\n");
 
-    Args recv_args = {.buffer = recv_buffer, .buffer_size = recv_buffer_size, .file_descriptor = client_fd};
-    Args send_args = {.buffer = send_buffer, .buffer_size = send_buffer_size, .file_descriptor = client_fd};
-
-    pthread_t recv_thread_id;
-    pthread_t send_thread_id;
-
-    pthread_create(&recv_thread_id, NULL, recv_thread, &recv_args);
-    pthread_create(&send_thread_id, NULL, send_thread, &send_args);
-
-    pthread_join(recv_thread_id, NULL);
-    pthread_join(send_thread_id, NULL);
+    run_chat(client_fd, BUFFER_SIZE);
 
     close(client_fd);
 }
@@ -188,7 +185,7 @@ int main()
 {
     int user_choice = 0;
 
-    printf("Choice option:\n1) Host chat\n2) Connect to chat\nYour choice: ");
+    printf("Choice option:\n1) Host chat\n2) Connect to chat\n\nYour choice: ");
     scanf("%d", &user_choice);
     getchar();
 
