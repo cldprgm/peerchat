@@ -6,13 +6,72 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <pthread.h>
 
 #define SERVER_PORT 8082
 
+typedef struct
+{
+    char *buffer;
+    size_t buffer_size;
+    int file_descriptor;
+} Args;
+
+void *recv_thread(void *arg)
+{
+    Args *args = (Args *)arg;
+    ssize_t bytes_read;
+
+    while (1)
+    {
+        bytes_read = recv(args->file_descriptor, args->buffer, args->buffer_size, 0);
+        if (bytes_read < 1)
+        {
+            printf("\nMessage read error.\t");
+            break;
+        }
+        args->buffer[bytes_read] = '\0';
+
+        printf("User: %s", args->buffer);
+    }
+
+    return NULL;
+}
+
+void *send_thread(void *arg)
+{
+    Args *args = (Args *)arg;
+    size_t len;
+    ssize_t bytes_sent;
+
+    while (1)
+    {
+        printf("You: ");
+
+        if (fgets(args->buffer, args->buffer_size, stdin) == NULL)
+        {
+            perror("\nCHAT CLIENT ERROR: message enter error\n");
+            break;
+        }
+
+        len = strlen(args->buffer);
+        bytes_sent = send(args->file_descriptor, args->buffer, len, 0);
+        if (bytes_sent < 0)
+        {
+            printf("\nMessage send error. Try again: \t");
+            break;
+        }
+    }
+
+    return NULL;
+}
+
 void start_server(int port)
 {
-    char host_chat_buffer[2048] = "Chat started!\n\n";
-    size_t buffer_size = sizeof(host_chat_buffer);
+    char recv_buffer[2048];
+    char send_buffer[2048];
+    size_t recv_buffer_size = sizeof(recv_buffer) - 1;
+    size_t send_buffer_size = sizeof(send_buffer) - 1;
 
     int server_fd, client_fd;
     int check_res;
@@ -57,37 +116,17 @@ void start_server(int port)
 
     printf("Client connected!\n\n");
 
-    ssize_t bytes_sent;
-    ssize_t bytes_read;
-    int keep_running_chat = 1;
-    while (keep_running_chat)
-    {
-        bytes_sent = send(client_fd, host_chat_buffer, strlen(host_chat_buffer), 0);
-        if (bytes_sent < 0)
-        {
-            printf("\nMessage send error. Try again: \t");
-            continue;
-        }
+    Args recv_args = {.buffer = recv_buffer, .buffer_size = recv_buffer_size, .file_descriptor = client_fd};
+    Args send_args = {.buffer = send_buffer, .buffer_size = send_buffer_size, .file_descriptor = client_fd};
 
-        bytes_read = recv(client_fd, host_chat_buffer, buffer_size - 1, 0);
-        if (bytes_read < 1)
-        {
-            printf("\nMessage read error.\t");
-            break;
-        }
-        host_chat_buffer[bytes_read] = '\0';
+    pthread_t recv_thread_id;
+    pthread_t send_thread_id;
 
-        printf("User: %s", host_chat_buffer);
-        printf("You: ");
+    pthread_create(&recv_thread_id, NULL, recv_thread, &recv_args);
+    pthread_create(&send_thread_id, NULL, send_thread, &send_args);
 
-        if (fgets(host_chat_buffer, buffer_size, stdin) == NULL)
-        {
-            perror("\nCHAT HOST ERROR: message enter error\n");
-            close(client_fd);
-            close(server_fd);
-            exit(1);
-        }
-    }
+    pthread_join(recv_thread_id, NULL);
+    pthread_join(send_thread_id, NULL);
 
     close(client_fd);
     close(server_fd);
@@ -95,8 +134,10 @@ void start_server(int port)
 
 void start_client(const char *ip_addr, int port)
 {
-    char client_chat_buffer[2048];
-    size_t buffer_size = sizeof(client_chat_buffer);
+    char recv_buffer[2048];
+    char send_buffer[2048];
+    size_t recv_buffer_size = sizeof(recv_buffer) - 1;
+    size_t send_buffer_size = sizeof(send_buffer) - 1;
 
     int client_fd;
 
@@ -126,38 +167,19 @@ void start_client(const char *ip_addr, int port)
         exit(1);
     }
 
-    ssize_t bytes_sent;
-    ssize_t bytes_read;
-    int keep_running_chat = 1;
-    while (keep_running_chat)
-    {
-        bytes_read = recv(client_fd, client_chat_buffer, buffer_size - 1, 0);
-        if (bytes_read < 1)
-        {
-            printf("\nMessage read error.\t");
-            close(client_fd);
-            break;
-        }
-        client_chat_buffer[bytes_read] = '\0';
+    printf("Successfully connected!\n\n");
 
-        printf("Host: %s", client_chat_buffer);
-        printf("You: ");
+    Args recv_args = {.buffer = recv_buffer, .buffer_size = recv_buffer_size, .file_descriptor = client_fd};
+    Args send_args = {.buffer = send_buffer, .buffer_size = send_buffer_size, .file_descriptor = client_fd};
 
-        if (fgets(client_chat_buffer, buffer_size, stdin) == NULL)
-        {
-            perror("\nCHAT CLIENT ERROR: message enter error\n");
-            close(client_fd);
-            exit(1);
-        }
+    pthread_t recv_thread_id;
+    pthread_t send_thread_id;
 
-        bytes_sent = send(client_fd, client_chat_buffer, strlen(client_chat_buffer), 0);
-        if (bytes_sent < 0)
-        {
-            printf("\nMessage send error. Try again: \t");
-            close(client_fd);
-            continue;
-        }
-    }
+    pthread_create(&recv_thread_id, NULL, recv_thread, &recv_args);
+    pthread_create(&send_thread_id, NULL, send_thread, &send_args);
+
+    pthread_join(recv_thread_id, NULL);
+    pthread_join(send_thread_id, NULL);
 
     close(client_fd);
 }
