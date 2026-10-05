@@ -76,10 +76,10 @@ static void die(const char *message)
     exit(EXIT_FAILURE);
 }
 
-static void run_chat(int file_descriptor, const int buffer_size)
+static void run_chat(int file_descriptor)
 {
-    char recv_buffer[buffer_size];
-    char send_buffer[buffer_size];
+    char recv_buffer[BUFFER_SIZE];
+    char send_buffer[BUFFER_SIZE];
 
     Args recv_args = {.buffer = recv_buffer, .buffer_size = sizeof(recv_buffer) - 1, .file_descriptor = file_descriptor};
     Args send_args = {.buffer = send_buffer, .buffer_size = sizeof(send_buffer) - 1, .file_descriptor = file_descriptor};
@@ -146,7 +146,7 @@ static void start_server(int port)
 
     printf("Client connected!\n\n");
 
-    run_chat(client_fd, BUFFER_SIZE);
+    run_chat(client_fd);
 
     close(client_fd);
     close(server_fd);
@@ -178,7 +178,7 @@ static void start_client(const char *ip_addr, int port)
 
     printf("Successfully connected!\n\n");
 
-    run_chat(client_fd, BUFFER_SIZE);
+    run_chat(client_fd);
 
     close(client_fd);
 }
