@@ -2,13 +2,14 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+#include <errno.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <pthread.h>
 
-#define SERVER_PORT 8082
+#define DEFAULT_SERVER_PORT 8082
 #define BUFFER_SIZE 2048
 #define BACKLOG 3
 
@@ -113,10 +114,13 @@ static void start_server(int port)
 
     int reuse = 1;
     if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0)
+    {
+        close(server_fd);
         die("setsockopt");
+    }
 
-    struct sockaddr_in client_address;
-    struct sockaddr_in server_address;
+    struct sockaddr_in client_address = {0};
+    struct sockaddr_in server_address = {0};
 
     server_address.sin_family = AF_INET;
     server_address.sin_port = htons(port);
@@ -134,6 +138,7 @@ static void start_server(int port)
         die("listen");
     }
 
+    printf("Chat created.\n");
     printf("Waiting for client...\n");
 
     socklen_t client_address_len = sizeof(client_address);
@@ -152,23 +157,17 @@ static void start_server(int port)
     close(server_fd);
 }
 
-static void start_client(const char *ip_addr, int port)
+static void start_client(const struct in_addr *addr, int port)
 {
     int client_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (client_fd < 0)
         die("socket");
 
-    struct sockaddr_in server_address;
+    struct sockaddr_in server_address = {0};
 
     server_address.sin_family = AF_INET;
     server_address.sin_port = htons(port);
-
-    if (inet_pton(AF_INET, ip_addr, &server_address.sin_addr) != 1)
-    {
-        close(client_fd);
-        fprintf(stderr, "Invalid IP address: %s\n", ip_addr);
-        exit(EXIT_FAILURE);
-    }
+    server_address.sin_addr = *addr;
 
     if (connect(client_fd, (struct sockaddr *)&server_address, sizeof(server_address)) < 0)
     {
@@ -183,28 +182,128 @@ static void start_client(const char *ip_addr, int port)
     close(client_fd);
 }
 
-int main()
+static int parse_valid_mode(int argc, char *argv[])
 {
-    int user_choice = 0;
+    int res = 0;
 
-    printf("Choice option:\n1) Host chat\n2) Connect to chat\n\nYour choice: ");
-    scanf("%d", &user_choice);
-    getchar();
+    for (size_t i = 1; i < (size_t)argc; i++)
+    {
+        if (strcmp(argv[i], "-m") == 0)
+        {
+            if (i + 1 >= (size_t)argc)
+            {
+                fprintf(stderr, "'-m' requires a value\n");
+                return 0;
+            }
 
-    switch (user_choice)
+            if (strcmp(argv[i + 1], "host") == 0)
+                res = 1;
+            else if (strcmp(argv[i + 1], "client") == 0)
+                res = 2;
+            else
+            {
+                fprintf(stderr, "Invalid value for '-m': %s. Expected 'host' or 'client'\n", argv[i + 1]);
+                return 0;
+            }
+
+            break;
+        }
+    }
+    if (res == 0)
+    {
+        fprintf(stderr, "Required argument '-m' is missing\n");
+        return 0;
+    }
+
+    return res;
+}
+
+static int parse_valid_ip4(int argc, char *argv[], struct in_addr *buffer)
+{
+    for (size_t i = 1; i < (size_t)argc; i++)
+    {
+        if (strcmp(argv[i], "-ip") == 0)
+        {
+            if (i + 1 >= (size_t)argc)
+            {
+                fprintf(stderr, "'-ip' requires a value\n");
+                return 0;
+            }
+
+            if (inet_pton(AF_INET, argv[i + 1], buffer) == 1)
+            {
+                return 1;
+            }
+            fprintf(stderr, "Invalid IPv4 address: %s\n", argv[i + 1]);
+            return 0;
+        }
+    }
+
+    fprintf(stderr, "Required argument '-ip' is missing\n");
+    return 0;
+}
+
+static int parse_valid_port(int argc, char *argv[])
+{
+    int res = 0;
+
+    for (size_t i = 1; i < (size_t)argc; i++)
+    {
+        if (strcmp(argv[i], "-p") == 0)
+        {
+            if (i + 1 >= (size_t)argc)
+            {
+                fprintf(stderr, "'-p' requires a value (using default port %d)\n", DEFAULT_SERVER_PORT);
+                return 0;
+            }
+            errno = 0;
+            char *end;
+            long port = strtol(argv[i + 1], &end, 10);
+
+            if (errno != 0 || end == argv[i + 1] || *end != '\0' || port < 1 || port > 65535)
+            {
+                fprintf(stderr, "'-p' value is invalid (use: 1-65535, using default port %d)\n", DEFAULT_SERVER_PORT);
+                return 0;
+            }
+
+            res = (int)port;
+            break;
+        }
+    }
+
+    return res;
+}
+
+int main(int argc, char *argv[])
+{
+    int user_mode_choice;
+    if ((user_mode_choice = parse_valid_mode(argc, argv)) == 0)
+        return 1;
+
+    struct in_addr user_addr_choice;
+    if (user_mode_choice == 2)
+    {
+        if (parse_valid_ip4(argc, argv, &user_addr_choice) == 0)
+            return 1;
+    }
+
+    int user_port_choice;
+    if ((user_port_choice = parse_valid_port(argc, argv)) == 0)
+        user_port_choice = DEFAULT_SERVER_PORT;
+
+    switch (user_mode_choice)
     {
     case 1:
         printf("\n");
-        start_server(SERVER_PORT);
+        start_server(user_port_choice);
         break;
     case 2:
         printf("\n");
-        char ip[] = "127.0.0.1";
-        start_client(ip, SERVER_PORT);
+        start_client(&user_addr_choice, user_port_choice);
         break;
 
     default:
-        printf("\nIncorrect choice\n");
+        printf("\nIncorrect mode (use: 'host' or 'client')\n");
         break;
     }
 
