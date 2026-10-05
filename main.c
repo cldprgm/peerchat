@@ -19,17 +19,22 @@ typedef struct
     int file_descriptor;
 } Args;
 
-void *recv_thread(void *arg)
+static void *recv_thread(void *arg)
 {
-    Args *args = (Args *)arg;
+    Args *args = arg;
     ssize_t bytes_read;
 
     while (1)
     {
         bytes_read = recv(args->file_descriptor, args->buffer, args->buffer_size, 0);
-        if (bytes_read < 1)
+        if (bytes_read == 0)
         {
-            printf("\nMessage read error.\t");
+            printf("\nConnection closed.\t");
+            break;
+        }
+        if (bytes_read < 0)
+        {
+            perror("recv");
             break;
         }
         args->buffer[bytes_read] = '\0';
@@ -40,9 +45,9 @@ void *recv_thread(void *arg)
     return NULL;
 }
 
-void *send_thread(void *arg)
+static void *send_thread(void *arg)
 {
-    Args *args = (Args *)arg;
+    Args *args = arg;
     size_t len;
     ssize_t bytes_sent;
 
@@ -51,16 +56,13 @@ void *send_thread(void *arg)
         printf("You: ");
 
         if (fgets(args->buffer, args->buffer_size, stdin) == NULL)
-        {
-            perror("\nCHAT CLIENT ERROR: message enter error\n");
             break;
-        }
 
         len = strlen(args->buffer);
         bytes_sent = send(args->file_descriptor, args->buffer, len, 0);
         if (bytes_sent < 0)
         {
-            printf("\nMessage send error. Try again: \t");
+            perror("send");
             break;
         }
     }
@@ -103,7 +105,7 @@ static void run_chat(int file_descriptor, const int buffer_size)
     pthread_join(send_thread_id, NULL);
 }
 
-void start_server(int port)
+static void start_server(int port)
 {
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd < 0)
@@ -150,7 +152,7 @@ void start_server(int port)
     close(server_fd);
 }
 
-void start_client(const char *ip_addr, int port)
+static void start_client(const char *ip_addr, int port)
 {
     int client_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (client_fd < 0)
