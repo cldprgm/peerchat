@@ -18,8 +18,11 @@ typedef struct
 {
     char input_buffer[BUFFER_SIZE];
     size_t input_buffer_size;
+
     pthread_mutex_t mutex;
+
     struct termios old_terminal;
+
     int file_descriptor;
     int running;
 } Args;
@@ -27,6 +30,54 @@ typedef struct
 static void restore_terminal(Args *args)
 {
     tcsetattr(STDIN_FILENO, TCSANOW, &args->old_terminal);
+}
+
+static ssize_t recv_message(int fd, char *buf, size_t buf_size, int flags)
+{
+    static char recv_buffer[BUFFER_SIZE];
+    static size_t recv_size = 0;
+
+    while (1)
+    {
+        for (size_t i = 0; i < recv_size; i++)
+        {
+            if (recv_buffer[i] == '\n')
+            {
+                size_t message_size = i;
+
+                if (message_size >= buf_size)
+                    return -2;
+
+                memcpy(buf, recv_buffer, message_size);
+                buf[message_size] = '\0';
+
+                size_t remaining = recv_size - (message_size + 1);
+
+                memmove(recv_buffer, recv_buffer + message_size + 1, remaining);
+
+                recv_size = remaining;
+
+                return (ssize_t)message_size;
+            }
+        }
+
+        if (recv_size == sizeof(recv_buffer))
+            return -2;
+
+        ssize_t n = recv(fd, recv_buffer + recv_size, sizeof(recv_buffer) - recv_size, flags);
+        if (n == 0)
+            return 0;
+
+        if (n < 0)
+        {
+            if (errno == EINTR)
+                continue;
+
+            return -1;
+        }
+
+        recv_size += (size_t)n;
+    }
 }
 
 static void *recv_thread(void *arg)
@@ -37,7 +88,7 @@ static void *recv_thread(void *arg)
 
     while (1)
     {
-        bytes_read = recv(args->file_descriptor, buffer, sizeof(buffer) - 1, 0);
+        bytes_read = recv_message(args->file_descriptor, buffer, sizeof(buffer), 0);
         if (bytes_read == 0)
         {
             pthread_mutex_lock(&args->mutex);
@@ -62,14 +113,10 @@ static void *recv_thread(void *arg)
             break;
         }
 
-        buffer[bytes_read] = '\0';
-
         pthread_mutex_lock(&args->mutex);
 
         printf("\r\033[2K");
-        printf("User: %s", buffer);
-        if (buffer[bytes_read - 1] != '\n')
-            putchar('\n');
+        printf("User: %s\n", buffer);
 
         printf("You: ");
         fwrite(args->input_buffer, 1, args->input_buffer_size, stdout);
@@ -125,7 +172,9 @@ static void *send_thread(void *arg)
             {
                 putchar('\n');
 
-                ssize_t sent = send(args->file_descriptor, args->input_buffer, args->input_buffer_size, 0);
+                args->input_buffer[args->input_buffer_size] = '\n';
+
+                ssize_t sent = send(args->file_descriptor, args->input_buffer, args->input_buffer_size + 1, 0);
                 if (sent < 0)
                 {
                     perror("send");
@@ -161,7 +210,7 @@ static void *send_thread(void *arg)
         }
         else if ((unsigned char)ch > 31)
         {
-            if (args->input_buffer_size < BUFFER_SIZE - 1)
+            if (args->input_buffer_size < BUFFER_SIZE - 2)
             {
                 args->input_buffer[args->input_buffer_size++] = ch;
                 args->input_buffer[args->input_buffer_size] = '\0';
