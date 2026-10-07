@@ -80,6 +80,22 @@ static ssize_t recv_message(int fd, char *buf, size_t buf_size, int flags)
     }
 }
 
+static ssize_t send_message(int fd, const char *buf, size_t buf_size, int flags)
+{
+    ssize_t sent_bytes = 0;
+    while (sent_bytes < buf_size)
+    {
+        ssize_t n = send(fd, buf + sent_bytes, (ssize_t)buf_size - sent_bytes, flags);
+        if (n == 0)
+            return 0;
+        if (n < 0)
+            return -1;
+
+        sent_bytes += n;
+    }
+    return sent_bytes;
+}
+
 static void *recv_thread(void *arg)
 {
     Args *args = arg;
@@ -174,7 +190,7 @@ static void *send_thread(void *arg)
 
                 args->input_buffer[args->input_buffer_size] = '\n';
 
-                ssize_t sent = send(args->file_descriptor, args->input_buffer, args->input_buffer_size + 1, 0);
+                ssize_t sent = send_message(args->file_descriptor, args->input_buffer, args->input_buffer_size + 1, 0);
                 if (sent < 0)
                 {
                     perror("send");
