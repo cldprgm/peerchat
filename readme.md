@@ -133,7 +133,7 @@ This project is intentionally simple and currently supports:
 * IPv4 addresses
 * terminal-based communication
 
-It does not currently provide encryption, multiple simultaneous clients, message history, or a graphical interface.
+It does not currently provide encryption, multiple simultaneous clients, message history, or a graphical interface. Needed port forwarding.
 
 ## License
 

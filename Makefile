@@ -1,11 +1,11 @@
 CC = gcc
 
 CFLAGS = -Wall -Wextra -Wpedantic -std=c2x -O3 -Iinclude
-LDFLAGS = -pthread
+LDFLAGS = -pthread -lsodium
 
 TARGET = chat
 
-SRC = src/main.c src/cli_args.c src/chat.c src/network.c
+SRC = src/main.c src/cli_args.c src/chat.c src/network.c src/crypto.c
 
 OBJ = $(SRC:.c=.o)
 

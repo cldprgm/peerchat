@@ -1,11 +1,13 @@
 #ifndef CHAT_H
 #define CHAT_H
 
+#include "crypto.h"
+
 #include <stddef.h>
 #include <pthread.h>
 #include <termios.h>
 
-#define BUFFER_SIZE 2048
+#define BUFFER_SIZE 4096
 
 typedef struct
 {
@@ -16,10 +18,12 @@ typedef struct
 
     struct termios old_terminal;
 
+    crypto_session *session;
+
     int file_descriptor;
     int running;
 } Args;
 
-void run_chat(int file_descriptor);
+void run_chat(int file_descriptor, crypto_session *session);
 
 #endif

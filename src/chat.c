@@ -1,4 +1,5 @@
 #include "chat.h"
+#include "crypto.h"
 
 #include <unistd.h>
 #include <stdio.h>
@@ -223,9 +224,9 @@ static void *send_thread(void *arg)
     return NULL;
 }
 
-void run_chat(int file_descriptor)
+void run_chat(int file_descriptor, crypto_session *session)
 {
-    Args args = {.input_buffer = {0}, .input_buffer_size = 0, .file_descriptor = file_descriptor, .running = 1};
+    Args args = {.input_buffer = {0}, .input_buffer_size = 0, .session = session, .file_descriptor = file_descriptor, .running = 1};
 
     pthread_mutex_init(&args.mutex, NULL);
 
