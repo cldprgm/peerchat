@@ -296,6 +296,8 @@ void start_client(const struct in_addr *addr, int port)
     sodium_bin2hex(pb_key_hex, sizeof(pb_key_hex), client_keys.peer_pk, sizeof(client_keys.peer_pk));
     printf("User public key: %s\n\n", pb_key_hex);
 
+    printf("WARNING: Verify peer keys via a trusted channel to prevent MITM attacks!\n\n");
+
     // crypto_secretstream
     unsigned char server_header[crypto_secretstream_xchacha20poly1305_HEADERBYTES];
     unsigned char client_header[crypto_secretstream_xchacha20poly1305_HEADERBYTES];
