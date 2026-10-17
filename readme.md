@@ -112,7 +112,7 @@ Once connected, both peers can exchange messages in the terminal. For peers on s
 
 The application exchanges public keys directly over TCP without verifying that they belong to the intended peer. An active attacker positioned between the host and client could replace the public keys during the exchange. The attacker could then derive one key with the host and a different key with the client, decrypt and read messages, and re-encrypt them into the other session. Solution: Verify public-key fingerprints through a separate trusted channel.
 
-### Modules
+## Modules
 
 **`args.c`**
 Parses and validates command-line arguments.
