@@ -7,6 +7,7 @@
 
 int main(int argc, char *argv[])
 {
+    // validate cli args
     int user_mode_choice;
     if ((user_mode_choice = parse_valid_mode(argc, argv)) == 0)
         return 1;
@@ -22,6 +23,7 @@ int main(int argc, char *argv[])
     if ((user_port_choice = parse_valid_port(argc, argv)) == 0)
         user_port_choice = DEFAULT_PORT;
 
+    // mode choice
     switch (user_mode_choice)
     {
     case 1:

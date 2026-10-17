@@ -68,6 +68,7 @@ static int fill_server_keys(int fd, crypto_kx_keys *keys)
 
     crypto_kx_keypair(keys->pk, keys->sk);
 
+    // key exchange
     if (send_all(fd, keys->pk, sizeof(keys->pk), 0) < 0)
         return -1;
 
@@ -94,6 +95,7 @@ static int fill_client_keys(int fd, crypto_kx_keys *keys)
 
     crypto_kx_keypair(keys->pk, keys->sk);
 
+    // key exchange
     if (recv_all(fd, keys->peer_pk, sizeof(keys->peer_pk), 0) < 0)
         return -2;
 
@@ -113,6 +115,7 @@ static int fill_client_keys(int fd, crypto_kx_keys *keys)
 
 void start_server(int port)
 {
+    // socket conf
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd < 0)
         die("socket");
@@ -186,7 +189,12 @@ void start_server(int port)
     // print pb
     char pb_key_hex[crypto_kx_PUBLICKEYBYTES * 2 + 1];
     sodium_bin2hex(pb_key_hex, sizeof(pb_key_hex), server_keys.pk, sizeof(server_keys.pk));
-    printf("Your public key: %s\n\n", pb_key_hex);
+    printf("Your public key: %s\n", pb_key_hex);
+
+    sodium_bin2hex(pb_key_hex, sizeof(pb_key_hex), server_keys.peer_pk, sizeof(server_keys.peer_pk));
+    printf("User public key: %s\n\n", pb_key_hex);
+
+    printf("WARNING: Verify peer keys via a trusted channel to prevent MITM attacks!\n\n");
 
     // crypto_secretstream
     unsigned char server_header[crypto_secretstream_xchacha20poly1305_HEADERBYTES];
@@ -196,6 +204,8 @@ void start_server(int port)
     {
         crypto_session_clear(&session);
         sodium_memzero(&server_keys, sizeof(server_keys));
+        close(client_fd);
+        close(server_fd);
         die("crypto_session_init_tx");
     }
 
@@ -213,10 +223,12 @@ void start_server(int port)
         die("recv_all_client_header");
     }
 
-    if (crypto_session_init_rx(&session, server_keys.tx, client_header) != 0)
+    if (crypto_session_init_rx(&session, server_keys.rx, client_header) != 0)
     {
         crypto_session_clear(&session);
         sodium_memzero(&server_keys, sizeof(server_keys));
+        close(client_fd);
+        close(server_fd);
         die("crypto_session_init_rx");
     }
 
@@ -224,12 +236,15 @@ void start_server(int port)
 
     run_chat(client_fd, &session);
 
+    crypto_session_clear(&session);
+
     close(client_fd);
     close(server_fd);
 }
 
 void start_client(const struct in_addr *addr, int port)
 {
+    // socket conf
     int client_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (client_fd < 0)
         die("socket");
@@ -248,6 +263,7 @@ void start_client(const struct in_addr *addr, int port)
 
     printf("Successfully connected!\n\n");
 
+    // crypto_kx (key generation and exchange)
     if (sodium_init() < 0)
     {
         close(client_fd);
@@ -275,41 +291,52 @@ void start_client(const struct in_addr *addr, int port)
     // print pb
     char pb_key_hex[crypto_kx_PUBLICKEYBYTES * 2 + 1];
     sodium_bin2hex(pb_key_hex, sizeof(pb_key_hex), client_keys.pk, sizeof(client_keys.pk));
-    printf("Your public key: %s\n\n", pb_key_hex);
+    printf("Your public key: %s\n", pb_key_hex);
+
+    sodium_bin2hex(pb_key_hex, sizeof(pb_key_hex), client_keys.peer_pk, sizeof(client_keys.peer_pk));
+    printf("User public key: %s\n\n", pb_key_hex);
 
     // crypto_secretstream
     unsigned char server_header[crypto_secretstream_xchacha20poly1305_HEADERBYTES];
     unsigned char client_header[crypto_secretstream_xchacha20poly1305_HEADERBYTES];
 
-    if (crypto_session_init_tx(&session, client_keys.tx, server_header) != 0)
+    if (crypto_session_init_tx(&session, client_keys.tx, client_header) != 0)
     {
         crypto_session_clear(&session);
         sodium_memzero(&client_keys, sizeof(client_keys));
+        close(client_fd);
         die("crypto_session_init_tx");
     }
 
     if (recv_all(client_fd, server_header, sizeof(server_header), 0) != 0)
     {
+        crypto_session_clear(&session);
+        sodium_memzero(&client_keys, sizeof(client_keys));
         close(client_fd);
         die("recv_all_server_header");
     }
 
     if (send_all(client_fd, client_header, sizeof(client_header), 0) != 0)
     {
+        crypto_session_clear(&session);
+        sodium_memzero(&client_keys, sizeof(client_keys));
         close(client_fd);
         die("send_all_client_header");
     }
 
-    if (crypto_session_init_rx(&session, client_keys.tx, client_header) != 0)
+    if (crypto_session_init_rx(&session, client_keys.rx, server_header) != 0)
     {
         crypto_session_clear(&session);
         sodium_memzero(&client_keys, sizeof(client_keys));
+        close(client_fd);
         die("crypto_session_init_rx");
     }
 
     sodium_memzero(&client_keys, sizeof(client_keys));
 
     run_chat(client_fd, &session);
+
+    crypto_session_clear(&session);
 
     close(client_fd);
 }

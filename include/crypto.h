@@ -24,4 +24,18 @@ int crypto_session_init_rx(
 
 void crypto_session_clear(crypto_session *session);
 
+int encrypt_message(
+    crypto_session *session,
+    const unsigned char *plaintext,
+    unsigned long long plaintext_len,
+    unsigned char *ciphertext,
+    unsigned long long *ciphertext_len);
+
+int decrypt_message(
+    crypto_session *session,
+    const unsigned char *ciphertext,
+    unsigned long long ciphertext_len,
+    unsigned char *plaintext,
+    unsigned long long *plaintext_len);
+
 #endif

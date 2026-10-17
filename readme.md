@@ -11,11 +11,15 @@ The project uses TCP sockets for communication and POSIX threads to handle sendi
 * Simultaneous sending and receiving of messages
 * POSIX threads for concurrent I/O
 * Separate host and client modes
+* Session-key derivation with libsodium's crypto_kx
+* Authenticated message encryption with crypto_secretstream_xchacha20poly1305
 
 ## Requirements
 
 * POSIX-compatible system
-* GCC
+* make
+* libsodium
+* GCC or another compatible C compiler
 
 ## Build
 
@@ -77,6 +81,8 @@ A custom port can also be specified:
 ./chat -m client -ip 127.0.0.1 -p 9000
 ```
 
+Replace 127.0.0.1 with the host's actual IPv4 address. 127.0.0.1 is suitable only when both processes run on the same machine.
+
 ### Command-line options
 
 | Option        | Description                   |
@@ -100,8 +106,11 @@ Then start the client in another terminal:
 ./chat -m client -ip 127.0.0.1
 ```
 
-Once connected, both peers can exchange messages through the terminal.
+Once connected, both peers can exchange messages in the terminal. For peers on separate networks, firewall rules and/or router port forwarding may be required.
 
+## Known security limitation: unauthenticated key exchange (MITM)
+
+The application exchanges public keys directly over TCP without verifying that they belong to the intended peer. An active attacker positioned between the host and client could replace the public keys during the exchange. The attacker could then derive one key with the host and a different key with the client, decrypt and read messages, and re-encrypt them into the other session. Solution: Verify public-key fingerprints through a separate trusted channel.
 
 ### Modules
 
@@ -114,6 +123,9 @@ Handles TCP sockets, connections, sending, and receiving messages.
 **`chat.c`**
 Implements the chat logic, terminal input, and background threads.
 
+**`crypto.c`**
+Initializes cryptographic streams and encrypts/decrypts messages.
+
 **`main.c`**
 Initializes the application and selects the host or client mode.
 
@@ -122,6 +134,7 @@ Initializes the application and selects the host or client mode.
 * POSIX sockets
 * TCP/IP
 * POSIX threads (`pthread`)
+* libsodium
 * termios
 
 ## Limitations
@@ -133,7 +146,7 @@ This project is intentionally simple and currently supports:
 * IPv4 addresses
 * terminal-based communication
 
-It does not currently provide encryption, multiple simultaneous clients, message history, or a graphical interface. Needed port forwarding.
+It does not currently provide multiple simultaneous clients, message history, or a graphical interface. Connections across networks may require firewall configuration or port forwarding. The current key exchange is unauthenticated and is vulnerable to active man-in-the-middle attacks, as described above.
 
 ## License
 

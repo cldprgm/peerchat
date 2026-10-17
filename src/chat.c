@@ -4,75 +4,67 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <sys/socket.h>
+#include <arpa/inet.h>
 #include <errno.h>
 #include <string.h>
 
-static ssize_t recv_message(int fd, char *buf, size_t buf_size, int flags)
+static int recv_all(int fd, char *buf, size_t buf_size, int flags)
 {
-    static char recv_buffer[BUFFER_SIZE];
-    static size_t recv_size = 0;
-
-    while (1)
+    ssize_t recv_bytes = 0;
+    while (recv_bytes < (ssize_t)buf_size)
     {
-        for (size_t i = 0; i < recv_size; i++)
+        ssize_t n = recv(fd, buf + recv_bytes, (ssize_t)buf_size - recv_bytes, flags);
+
+        if (n > 0)
         {
-            if (recv_buffer[i] == '\n')
-            {
-                size_t message_size = i;
-
-                if (message_size >= buf_size)
-                    return -2;
-
-                memcpy(buf, recv_buffer, message_size);
-                buf[message_size] = '\0';
-
-                size_t remaining = recv_size - (message_size + 1);
-
-                memmove(recv_buffer, recv_buffer + message_size + 1, remaining);
-
-                recv_size = remaining;
-
-                return (ssize_t)message_size;
-            }
+            recv_bytes += n;
+            continue;
         }
 
-        if (recv_size == sizeof(recv_buffer))
-            return -2;
-
-        ssize_t n = recv(fd, recv_buffer + recv_size, sizeof(recv_buffer) - recv_size, flags);
         if (n == 0)
-            return 0;
-
-        if (n < 0)
         {
-            if (errno == EINTR)
-                continue;
+            if (recv_bytes == 0)
+                return 0;
 
+            errno = ECONNRESET;
             return -1;
         }
 
-        recv_size += (size_t)n;
+        if (errno == EINTR)
+            continue;
+
+        return -1;
     }
+    return 1;
 }
 
-static ssize_t send_message(int fd, const char *buf, size_t buf_size, int flags)
+static int send_all(int fd, const char *buf, size_t buf_size, int flags)
 {
     ssize_t sent_bytes = 0;
     while (sent_bytes < (ssize_t)buf_size)
     {
         ssize_t n = send(fd, buf + sent_bytes, (ssize_t)buf_size - sent_bytes, flags);
-        if (n == 0)
-            return 0;
-        if (n < 0)
-            return -1;
 
-        sent_bytes += n;
+        if (n > 0)
+        {
+            sent_bytes += n;
+            continue;
+        }
+
+        if (n < 0 && errno == EINTR)
+            continue;
+
+        if (n == 0)
+            errno = EPIPE;
+
+        return -1;
     }
-    return sent_bytes;
+    return 0;
 }
 
-static void restore_terminal(Args *args)
+static void restore_terminal(void *arg)
 {
+    Args *args = arg;
     tcsetattr(STDIN_FILENO, TCSANOW, &args->old_terminal);
 }
 
@@ -80,12 +72,17 @@ static void *recv_thread(void *arg)
 {
     Args *args = arg;
     char buffer[BUFFER_SIZE];
-    ssize_t bytes_read;
+    int res;
+
+    unsigned char ciphertext[BUFFER_SIZE];
 
     while (1)
     {
-        bytes_read = recv_message(args->file_descriptor, buffer, sizeof(buffer), 0);
-        if (bytes_read == 0)
+        // recv message len
+        uint32_t net_len = 0;
+        res = recv_all(args->file_descriptor, (char *)&net_len, sizeof(net_len), 0);
+
+        if (res == 0)
         {
             pthread_mutex_lock(&args->mutex);
 
@@ -97,17 +94,82 @@ static void *recv_thread(void *arg)
             pthread_mutex_unlock(&args->mutex);
             break;
         }
-        if (bytes_read < 0)
+        if (res < 0)
         {
             pthread_mutex_lock(&args->mutex);
 
             args->running = 0;
             printf("\r\033[2K");
-            perror("recv");
+            perror("recv message len");
 
             pthread_mutex_unlock(&args->mutex);
             break;
         }
+
+        net_len = ntohl(net_len);
+        if (net_len > BUFFER_SIZE || net_len < crypto_secretstream_xchacha20poly1305_ABYTES)
+        {
+            pthread_mutex_lock(&args->mutex);
+
+            args->running = 0;
+            perror("invalid encrypted message length");
+
+            pthread_mutex_unlock(&args->mutex);
+            break;
+        }
+
+        // recv encrypt message
+        res = recv_all(args->file_descriptor, (char *)ciphertext, (size_t)net_len, 0);
+        if (res == 0)
+        {
+            pthread_mutex_lock(&args->mutex);
+
+            args->running = 0;
+            printf("\r\033[2K");
+            printf("\nConnection closed before ciphertext was received.\n");
+            fflush(stdout);
+
+            pthread_mutex_unlock(&args->mutex);
+            break;
+        }
+        if (res < 0)
+        {
+            pthread_mutex_lock(&args->mutex);
+
+            args->running = 0;
+            printf("\r\033[2K");
+            perror("recv encrypted message");
+
+            pthread_mutex_unlock(&args->mutex);
+            break;
+        }
+
+        // decrypt message
+        unsigned long long buffer_len = 0;
+
+        if (decrypt_message(
+                args->session,
+                ciphertext,
+                (unsigned long long)net_len,
+                (unsigned char *)buffer,
+                &buffer_len) != 0)
+        {
+            fprintf(stderr, "\ndecrypt_message failed. ciphertext length = %u\n", (unsigned int)net_len);
+
+            args->running = 0;
+            break;
+        }
+
+        // print message
+        if (buffer_len >= sizeof(buffer))
+        {
+            fprintf(stderr, "decrypted message too large\n");
+
+            args->running = 0;
+            break;
+        }
+
+        buffer[buffer_len] = '\0';
 
         pthread_mutex_lock(&args->mutex);
 
@@ -128,6 +190,11 @@ static void *send_thread(void *arg)
 {
     Args *args = arg;
 
+    unsigned char ciphertext[BUFFER_SIZE];
+    unsigned char plaintext[BUFFER_SIZE];
+    int res;
+
+    // terminal conf
     struct termios raw_terminal;
     if (tcgetattr(STDIN_FILENO, &args->old_terminal) < 0)
     {
@@ -144,7 +211,7 @@ static void *send_thread(void *arg)
         return NULL;
     }
 
-    pthread_cleanup_push((void (*)(void *))restore_terminal, args);
+    pthread_cleanup_push(restore_terminal, args);
 
     pthread_mutex_lock(&args->mutex);
 
@@ -155,44 +222,42 @@ static void *send_thread(void *arg)
 
     while (args->running)
     {
+        // read char
         char ch;
         ssize_t bytes_read = read(STDIN_FILENO, &ch, 1);
         if (bytes_read < 1)
+        {
+            args->running = 0;
+            shutdown(args->file_descriptor, SHUT_RDWR);
             break;
+        }
+
+        size_t message_len = 0;
+        int should_send = 0;
 
         pthread_mutex_lock(&args->mutex);
 
+        // ch - Enter
         if (ch == '\n' || ch == '\r')
         {
+            putchar('\n');
+
             if (args->input_buffer_size > 0)
             {
-                putchar('\n');
+                message_len = args->input_buffer_size;
 
-                args->input_buffer[args->input_buffer_size] = '\n';
+                memcpy(plaintext, args->input_buffer, message_len);
 
-                ssize_t sent = send_message(args->file_descriptor, args->input_buffer, args->input_buffer_size + 1, 0);
-                if (sent < 0)
-                {
-                    perror("send");
-                    args->running = 0;
-                }
-
+                // clear buffer
                 args->input_buffer_size = 0;
                 args->input_buffer[0] = '\0';
 
-                if (args->running)
-                {
-                    printf("You: ");
-                    fflush(stdout);
-                }
+                should_send = 1;
             }
-            else
-            {
-                putchar('\n');
-                printf("You: ");
-                fflush(stdout);
-            }
+            printf("You: ");
+            fflush(stdout);
         }
+        // ch - Backspace
         else if (ch == 127 || ch == '\b')
         {
             if (args->input_buffer_size > 0)
@@ -204,9 +269,10 @@ static void *send_thread(void *arg)
                 fflush(stdout);
             }
         }
+        // ch - any symbol
         else if ((unsigned char)ch > 31)
         {
-            if (args->input_buffer_size < BUFFER_SIZE - 2)
+            if (args->input_buffer_size < BUFFER_SIZE - crypto_secretstream_xchacha20poly1305_ABYTES)
             {
                 args->input_buffer[args->input_buffer_size++] = ch;
                 args->input_buffer[args->input_buffer_size] = '\0';
@@ -216,7 +282,48 @@ static void *send_thread(void *arg)
             }
         }
 
+        // unlock for network operations
         pthread_mutex_unlock(&args->mutex);
+
+        if (!should_send)
+            continue;
+
+        // encrypt message
+        unsigned long long ciphertext_len = 0;
+
+        if (encrypt_message(
+                args->session,
+                plaintext,
+                (unsigned long long)message_len,
+                ciphertext,
+                &ciphertext_len) != 0)
+        {
+            perror("encrypt message");
+            args->running = 0;
+            shutdown(args->file_descriptor, SHUT_RDWR);
+            break;
+        }
+
+        // send message len
+        uint32_t net_len = htonl((uint32_t)ciphertext_len);
+        res = send_all(args->file_descriptor, (const char *)&net_len, sizeof(net_len), 0);
+        if (res != 0)
+        {
+            perror("send message len");
+            args->running = 0;
+            shutdown(args->file_descriptor, SHUT_RDWR);
+            break;
+        }
+
+        // send encrypt message
+        res = send_all(args->file_descriptor, (const char *)ciphertext, (size_t)ciphertext_len, 0);
+        if (res != 0)
+        {
+            perror("send encrypt message");
+            args->running = 0;
+            shutdown(args->file_descriptor, SHUT_RDWR);
+            break;
+        }
     }
 
     pthread_cleanup_pop(1);
