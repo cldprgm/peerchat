@@ -49,6 +49,14 @@ To perform a clean rebuild:
 make re
 ```
 
+### Run unit tests
+
+Build and run the unit tests for the source modules:
+
+```bash
+make test
+```
+
 ## Usage
 
 ### Start the host
