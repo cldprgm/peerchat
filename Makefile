@@ -1,6 +1,6 @@
 CC = gcc
 
-CFLAGS = -Wall -Wextra -Wpedantic -std=c2x -O3 -Iinclude
+CFLAGS = -Wall -Wextra -Wpedantic -std=c2x -O2 -Iinclude
 LDFLAGS = -pthread -lsodium
 
 TARGET = chat
